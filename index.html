@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#000000" />
+    <title>RecomendaAI - Catálogo de Filmes Reais</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<!-- ================= CHATBOT IA ================= -->
+<button id="chat-toggle" class="chat-toggle">
+    🎬
+</button>
+
+<div id="chat-container" class="chat-container hidden">
+    <div class="chat-header">
+        <div>
+            <h3>RecomendaAI Bot</h3>
+            <p>Seu assistente inteligente de filmes</p>
+        </div>
+
+        <button id="chat-close" class="chat-close">
+            ✕
+        </button>
+    </div>
+
+    <div id="chat-messages" class="chat-messages">
+        <!-- mensagens -->
+    </div>
+
+    <div class="chat-input-area">
+        <input
+            type="text"
+            id="chat-input"
+            placeholder="Pergunte sobre filmes..."
+        />
+
+        <button id="chat-send">
+            Enviar
+        </button>
+    </div>
+</div> 
+<body>
+    <div id="login-screen" class="screen">
+        <div class="login-container">
+            <h1>RecomendaAI</h1>
+            <p class="subtitle">Catálogo inteligente de filmes reais</p>
+
+            <div class="auth-tabs">
+                <button id="tab-login" class="tab-btn active">Entrar</button>
+                <button id="tab-register" class="tab-btn">Cadastrar</button>
+            </div>
+
+            <form id="login-form" class="auth-form">
+                <input type="email" id="login-email" placeholder="E-mail" required />
+                <input type="password" id="login-password" placeholder="Senha" required minlength="4" />
+                <button type="submit" class="btn-primary">Entrar</button>
+                <p id="login-error" class="error-msg hidden"></p>
+            </form>
+
+            <form id="register-form" class="auth-form hidden">
+                <input type="text" id="register-name" placeholder="Nome" required />
+                <input type="email" id="register-email" placeholder="E-mail" required />
+                <input type="password" id="register-password" placeholder="Senha (mín. 4 caracteres)" required minlength="4" />
+                <button type="submit" class="btn-primary">Criar Conta</button>
+                <p id="register-error" class="error-msg hidden"></p>
+            </form>
+
+            <p class="auth-info">Suas credenciais são enviadas de forma segura ao servidor e sua senha é armazenada com hash (bcrypt).</p>
+        </div>
+    </div>
+
+    <div id="preferences-screen" class="screen hidden">
+        <div class="preferences-container">
+            <h2>Olá, <span id="user-name-prefs"></span> 👋</h2>
+            <p>Selecione seus gêneros favoritos para a IA personalizar suas recomendações.</p>
+            <div class="genres-grid" id="genres-grid"></div>
+            <button id="save-preferences" class="btn-primary">Salvar Preferências</button>
+            <div id="feedback-msg" class="feedback hidden">Preferências salvas com sucesso!</div>
+        </div>
+    </div>
+
+    <div id="home-screen" class="screen hidden">
+        <nav class="navbar">
+            <h2>RecomendaAI</h2>
+            <div class="nav-actions">
+                <span class="user-greeting">Olá, <strong id="user-name-nav"></strong></span>
+                <button id="go-favorites-btn" class="btn-secondary">♥ Favoritos</button>
+                <button id="edit-prefs-btn" class="btn-secondary">Editar Gêneros</button>
+                <button id="logout-btn" class="btn-secondary">Sair</button>
+            </div>
+        </nav>
+
+        <main class="content">
+            <section class="search-section">
+                <form id="search-form" class="search-box">
+                    <input type="text" id="search-input" placeholder="Pesquisar por título de filme..." required />
+                    <button type="submit" class="btn-primary" style="width: auto; min-width: 120px;">Buscar</button>
+                </form>
+            </section>
+
+            <section class="movie-section hidden" id="search-results-section">
+                <div class="section-header">
+                    <h3 class="section-title">🔍 Resultados da Busca</h3>
+                    <button id="clear-search-btn" class="btn-secondary" style="padding: 6px 14px; font-size: 0.85rem;">Limpar Busca</button>
+                </div>
+                <div id="search-movies-container" class="movies-row"></div>
+            </section>
+
+            <div id="default-home-content">
+                <section class="movie-section">
+                    <h3 class="section-title">🤖 Recomendado para Você (Baseado nas suas preferências)</h3>
+                    <div id="ai-movies-container" class="movies-row">
+                        <div class="loader">Carregando recomendações...</div>
+                    </div>
+                </section>
+
+                <section class="movie-section" id="favorites-section">
+                    <h3 class="section-title">♥ Meus Favoritos</h3>
+                    <div id="favorites-movies-container" class="movies-row"></div>
+                </section>
+
+                <section class="movie-section">
+                    <h3 class="section-title">🔥 Em Alta no Mundo</h3>
+                    <div id="trending-movies-container" class="movies-row">
+                        <div class="loader">Carregando filmes em alta...</div>
+                    </div>
+                </section>
+
+                <section class="movie-section">
+                    <h3 class="section-title">⭐ Mais Bem Avaliados de Sempre</h3>
+                    <div id="top-movies-container" class="movies-row">
+                        <div class="loader">Carregando...</div>
+                    </div>
+                </section>
+
+                <section class="movie-section" id="catalog-section">
+                    <h3 class="section-title">📚 Catálogo Completo (Explorar)</h3>
+                    <div id="catalog-movies-container" class="movies-row">
+                        <div class="loader">Carregando catálogo...</div>
+                    </div>
+                    <div style="text-align: center; margin-top: 30px;">
+                        <button id="load-more-catalog" class="btn-secondary hidden" style="width: auto; padding: 12px 40px;">Carregar Mais Filmes</button>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Dados fornecidos por <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a></p>
+        </footer>
+    </div>
+
+    <div id="movie-modal" class="modal hidden">
+        <div class="modal-overlay" id="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="modal-close" id="modal-close">&times;</button>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
