@@ -253,21 +253,116 @@ app.get('/api/tmdb/*', async (req, res) => {
 });
 
 // ================= PROXY GEMINI (esconde a GEMINI_API_KEY do front-end) =================
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// Modelos de reserva, usados só quando o principal continua sobrecarregado (erro 503/500).
+// Separe por vírgula no .env (GEMINI_FALLBACK_MODELS) para trocar.
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-flash-lite-latest,gemini-2.5-flash-lite')
+    .split(',').map(m => m.trim()).filter(Boolean);
+// Nível de "raciocínio" do modelo: quanto menor, mais rápida a resposta.
+// Valores: minimal | low | medium | high | off (off = não envia o parâmetro).
+// Nem todo modelo aceita todos os níveis; "low" é aceito pelos modelos Gemini 3.
+const GEMINI_THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL || 'low').toLowerCase();
+
+// Ordem de tentativas: o nível pedido, depois "low", depois sem o parâmetro (null).
+// Quando uma opção é recusada pela API, o servidor lembra e passa para a próxima,
+// para não repetir a tentativa que falha a cada mensagem do chat.
+const thinkingOptions = GEMINI_THINKING_LEVEL === 'off'
+    ? [null]
+    : [...new Set([GEMINI_THINKING_LEVEL, 'low'])].concat([null]);
+let thinkingIndex = 0;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Chama o Gemini repetindo em falhas de REDE (conexão fechada, reset etc.).
+// Respostas HTTP (400, 429, 503...) não entram aqui: elas voltam normalmente.
+async function fetchWithRetry(url, options, attempts = 3) {
+    let lastErr;
+    for (let i = 1; i <= attempts; i++) {
+        try {
+            return await fetch(url, { ...options, signal: AbortSignal.timeout(45000) });
+        } catch (err) {
+            lastErr = err;
+            if (err.name === 'TimeoutError') throw err; // demorou demais: não adianta repetir
+            console.warn(`Falha de rede ao chamar o Gemini (tentativa ${i}/${attempts}): ${err.cause?.code || err.message}`);
+            if (i < attempts) await sleep(600 * i);
+        }
+    }
+    throw lastErr;
+}
+
+async function callGemini(body, thinkingLevel, model = GEMINI_MODEL) {
+    const payload = thinkingLevel
+        ? {
+            ...body,
+            generationConfig: {
+                ...(body.generationConfig || {}),
+                thinkingConfig: { thinkingLevel }
+            }
+        }
+        : body;
+
+    const geminiRes = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }
+    );
+    const data = await geminiRes.json().catch(() => ({}));
+    return { status: geminiRes.status, data };
+}
+
 app.post('/api/chat', async (req, res) => {
     try {
-        const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(req.body)
+        let result;
+
+        while (true) {
+            const level = thinkingOptions[thinkingIndex];
+            result = await callGemini(req.body, level);
+
+            const message = result.data?.error?.message || '';
+            const recusouRaciocinio = result.status === 400 && /thinking/i.test(message);
+
+            if (recusouRaciocinio && thinkingIndex < thinkingOptions.length - 1) {
+                console.warn(`Gemini recusou o nível "${level}": ${message}\n→ tentando a próxima opção.`);
+                thinkingIndex++;
+                continue;
             }
-        );
-        const data = await geminiRes.json();
-        res.status(geminiRes.status).json(data);
+            break;
+        }
+
+        // 503 = modelo sobrecarregado (500 = erro interno do Google). Costuma passar em segundos:
+        // espera um pouco e tenta de novo, até 2 vezes.
+        const indisponivel = (r) => r.status === 503 || r.status === 500;
+
+        for (let tentativa = 1; indisponivel(result) && tentativa <= 2; tentativa++) {
+            console.warn(`Gemini respondeu ${result.status} (${result.data?.error?.message || 'sem detalhes'}). Nova tentativa ${tentativa}/2...`);
+            await sleep(1500 * tentativa);
+            result = await callGemini(req.body, thinkingOptions[thinkingIndex]);
+        }
+
+        // Continua fora do ar: tenta os modelos de reserva (sem o parâmetro de raciocínio)
+        if (indisponivel(result)) {
+            for (const model of GEMINI_FALLBACK_MODELS) {
+                const reserva = await callGemini(req.body, null, model);
+                if (reserva.status === 200) {
+                    console.warn(`Resposta gerada pelo modelo de reserva: ${model}`);
+                    result = reserva;
+                    break;
+                }
+                console.warn(`Modelo de reserva ${model} também falhou (status ${reserva.status}).`);
+            }
+        }
+
+        res.status(result.status).json(result.data);
     } catch (err) {
-        console.error('Erro no proxy Gemini:', err);
-        res.status(500).json({ error: 'Erro ao falar com a IA.' });
+        console.error('Erro no proxy Gemini:', err.cause?.code || err.message);
+        if (err.name === 'TimeoutError') {
+            return res.status(504).json({ error: 'A IA demorou demais para responder.' });
+        }
+        res.status(502).json({ error: 'Não foi possível conectar à IA. Verifique a internet/rede.' });
     }
 });
 
