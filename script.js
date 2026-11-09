@@ -714,43 +714,39 @@ function getUserGenreNames() {
 
 // ================= MONTAR PROMPT =================
 
-function buildPrompt(userMessage) {
+function buildSystemPrompt() {
 
     const user = getCurrentUser();
 
     const favoriteGenres = getUserGenreNames();
 
     return `
-Você é um especialista em cinema chamado RecomendaAI.
+Você é o RecomendaAI, especialista em cinema.
 
-O usuário se chama: ${user?.name || 'Usuário'}
-
-Gêneros favoritos:
-${favoriteGenres.join(', ')}
+Usuário: ${user?.name || 'Usuário'}
+Gêneros favoritos: ${favoriteGenres.length ? favoriteGenres.join(', ') : 'não informados'}
 
 REGRAS:
-- Seja amigável
-- Recomende filmes reais
-- Explique rapidamente porque recomendou
-- Sugira filmes populares e bem avaliados
-- Sempre que possível cite:
-  - nome do filme
-  - gênero
-  - ano
-- Respostas curtas e organizadas
-- Nunca invente filmes
+- Seja amigável e direto. Responda em até 80 palavras.
+- Recomende no máximo 3 filmes reais, populares e bem avaliados. Nunca invente filmes.
+- Para cada filme, UMA linha: **Título** (ano) — motivo curto.
 
 FORMATO DA RESPOSTA (muito importante):
-- Escreva em texto simples. Pode usar **negrito** apenas no nome dos filmes.
-- Não use tabelas nem títulos com #.
+- Texto simples. Pode usar **negrito** apenas no nome dos filmes. Sem tabelas e sem títulos com #.
 - Se você recomendou ou citou filmes, termine a resposta com UMA última linha, exatamente neste formato e sem nada depois dela:
 [[FILMES: Título do Filme (ano) ; Outro Filme (ano)]]
-- Use o nome mais conhecido no Brasil, no máximo 5 filmes, separados por ponto e vírgula.
+- Use o nome mais conhecido no Brasil, separando os filmes por ponto e vírgula.
 - Se você não citou nenhum filme, não escreva essa linha.
-
-Pergunta do usuário:
-"${userMessage}"
 `;
+}
+
+// Só as últimas mensagens vão para a IA (menos texto = resposta mais rápida)
+const CHAT_HISTORY_LIMIT = 8;
+
+function getRecentChatHistory() {
+    let recent = chatHistory.slice(-CHAT_HISTORY_LIMIT);
+    while (recent.length && recent[0].role !== 'user') recent = recent.slice(1);
+    return recent;
 }
 
 // ================= ENVIAR MENSAGEM =================
@@ -769,11 +765,9 @@ async function sendChatMessage() {
 
     try {
 
-        const prompt = buildPrompt(message);
-
         chatHistory.push({
             role: 'user',
-            parts: [{ text: prompt }]
+            parts: [{ text: message }]
         });
 
         const response = await fetch(`${API_BASE}/chat`, {
@@ -783,12 +777,13 @@ async function sendChatMessage() {
             },
 
             body: JSON.stringify({
-                contents: chatHistory,
+                systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
+                contents: getRecentChatHistory(),
                 generationConfig: {
-                    temperature: 0.9,
+                    temperature: 0.8,
                     topK: 40,
                     topP: 0.95,
-                    maxOutputTokens: 1500
+                    maxOutputTokens: 800
                 }
             })
         });
