@@ -276,11 +276,11 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Chama o Gemini repetindo em falhas de REDE (conexão fechada, reset etc.).
 // Respostas HTTP (400, 429, 503...) não entram aqui: elas voltam normalmente.
-async function fetchWithRetry(url, options, attempts = 3) {
+async function fetchWithRetry(url, options, attempts = 3, timeoutMs = 30000) {
     let lastErr;
     for (let i = 1; i <= attempts; i++) {
         try {
-            return await fetch(url, { ...options, signal: AbortSignal.timeout(45000) });
+            return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
         } catch (err) {
             lastErr = err;
             if (err.name === 'TimeoutError') throw err; // demorou demais: não adianta repetir
@@ -291,7 +291,7 @@ async function fetchWithRetry(url, options, attempts = 3) {
     throw lastErr;
 }
 
-async function callGemini(body, thinkingLevel, model = GEMINI_MODEL) {
+async function callGemini(body, thinkingLevel, model = GEMINI_MODEL, timeoutMs = 30000) {
     const payload = thinkingLevel
         ? {
             ...body,
@@ -302,14 +302,25 @@ async function callGemini(body, thinkingLevel, model = GEMINI_MODEL) {
         }
         : body;
 
-    const geminiRes = await fetchWithRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+    let geminiRes;
+    try {
+        geminiRes = await fetchWithRetry(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            },
+            3,
+            timeoutMs
+        );
+    } catch (err) {
+        if (err.name === 'TimeoutError') {
+            console.warn(`Gemini (${model}) não respondeu em ${timeoutMs / 1000}s.`);
+            return { status: 504, data: { error: { code: 504, message: 'A IA demorou demais para responder.' } } };
         }
-    );
+        throw err;
+    }
     const data = await geminiRes.json().catch(() => ({}));
     return { status: geminiRes.status, data };
 }
@@ -335,9 +346,11 @@ app.post('/api/chat', async (req, res) => {
 
         // 503 = modelo sobrecarregado (500 = erro interno do Google). Costuma passar em segundos:
         // espera um pouco e tenta de novo, até 2 vezes.
-        const indisponivel = (r) => r.status === 503 || r.status === 500;
+        const passageiro = (r) => r.status === 503 || r.status === 500;
+        // 504 = o modelo demorou demais: repetir nele só gasta mais tempo, então vai direto para a reserva
+        const indisponivel = (r) => passageiro(r) || r.status === 504;
 
-        for (let tentativa = 1; indisponivel(result) && tentativa <= 2; tentativa++) {
+        for (let tentativa = 1; passageiro(result) && tentativa <= 2; tentativa++) {
             console.warn(`Gemini respondeu ${result.status} (${result.data?.error?.message || 'sem detalhes'}). Nova tentativa ${tentativa}/2...`);
             await sleep(1500 * tentativa);
             result = await callGemini(req.body, thinkingOptions[thinkingIndex]);
@@ -346,7 +359,7 @@ app.post('/api/chat', async (req, res) => {
         // Continua fora do ar: tenta os modelos de reserva (sem o parâmetro de raciocínio)
         if (indisponivel(result)) {
             for (const model of GEMINI_FALLBACK_MODELS) {
-                const reserva = await callGemini(req.body, null, model);
+                const reserva = await callGemini(req.body, null, model, 20000);
                 if (reserva.status === 200) {
                     console.warn(`Resposta gerada pelo modelo de reserva: ${model}`);
                     result = reserva;
